@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "music-man"
+version = "0.1.0"
+description = "Music-streaming royalty-fraud lakehouse: PySpark/Delta Lake/MLflow pipeline with an agentic, human-approved fraud-hold copilot."
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["src"]

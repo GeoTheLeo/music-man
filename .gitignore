@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+.venv/
+
+# Downloaded/bundled binaries (large, regenerable - see README for setup)
+tools/
+
+# Generated data (regenerable via the generator + pipeline)
+data/bronze/
+data/silver/
+data/gold/
+data/seed/
+data/queue.db
+data/audit_log.csv
+
+# MLflow / model artifacts
+mlruns/
+models/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Kaggle credentials should never live in the repo either way, but guard
+# against an accidental local copy.
+kaggle.json
+
+# Testing
+.pytest_cache/
+
+# Spark
+metastore_db/
+derby.log
+spark-warehouse/
+
+# OS
+.DS_Store
+Thumbs.db
