@@ -10,6 +10,7 @@ cumulative spend (agent + judge) crosses the cap.
     python -m evals.run_evals --yes --trials 2      # full sweep
     python -m evals.run_evals --yes --scenario dry_run --config routed --trials 1
     python -m evals.run_evals --yes --record-golden # save passing runs as golden transcripts
+    python -m evals.run_evals --yes --config routed --engine custom --engine langgraph  # engine comparison
 """
 
 from __future__ import annotations
@@ -30,29 +31,30 @@ from evals.scenarios import SCENARIOS, SCENARIOS_BY_ID
 from music_man.agent.cost import UsageTracker
 from music_man.agent.queue import list_holds
 from music_man.agent.run_agent import EXEC_MODEL, PLAN_MODEL, make_client, run_agent
+from music_man.agent_graph.run import run_graph
 
 CONFIGS = {
     "routed": {"plan_model": PLAN_MODEL, "exec_model": EXEC_MODEL},
     "opus-only": {"plan_model": EXEC_MODEL, "exec_model": EXEC_MODEL},
 }
 REPORTS_DIR = Path(__file__).parent / "reports"
-EST_COST_PER_RUN_USD = 0.30  # rough planning figure; the report records the real cost
+ENGINES = ("custom", "langgraph")
+EST_COST_PER_RUN_USD = 0.15  # rough planning figure; the report records the real cost
 
 
-def _run_trial(client, scenario, config_name, trial, workdir: Path, use_judge: bool, judge_tracker):
+def _run_trial(client, scenario, engine, config_name, trial, workdir: Path, use_judge: bool, judge_tracker):
     os.environ["MUSIC_MAN_QUEUE_DB"] = str(workdir / "queue.db")
     os.environ["MUSIC_MAN_SNAPSHOT"] = str(write_snapshot(workdir / "snapshot.parquet"))
     if scenario.setup:
         scenario.setup()
 
-    record = run_agent(
-        scenario.prompt,
-        dry_run=scenario.dry_run,
-        client=client,
-        verbose=False,
-        save=False,
-        **CONFIGS[config_name],
-    )
+    if engine == "langgraph":
+        # Stops at the human-review interrupt; the grader reads the pending holds it queued.
+        record, _ = run_graph(scenario.prompt, dry_run=scenario.dry_run, verbose=False, save=False,
+                              **CONFIGS[config_name])
+    else:
+        record = run_agent(scenario.prompt, dry_run=scenario.dry_run, client=client, verbose=False,
+                           save=False, **CONFIGS[config_name])
     result = grade(record, scenario, list_holds())
     if use_judge and record.outcome == "completed":
         try:
@@ -125,6 +127,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Music Man agent evals")
     parser.add_argument("--scenario", action="append", choices=sorted(SCENARIOS_BY_ID), help="default: all")
     parser.add_argument("--config", action="append", choices=sorted(CONFIGS), help="default: all")
+    parser.add_argument("--engine", action="append", choices=ENGINES, help="default: custom")
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--no-judge", action="store_true")
     parser.add_argument("--record-golden", action="store_true", help="save passing runs as golden transcripts")
@@ -134,8 +137,10 @@ def main() -> None:
 
     scenarios = [SCENARIOS_BY_ID[s] for s in args.scenario] if args.scenario else SCENARIOS
     configs = args.config or list(CONFIGS)
-    planned = len(scenarios) * len(configs) * args.trials
-    print(f"Plan: {len(scenarios)} scenarios x {len(configs)} configs x {args.trials} trials = {planned} agent runs")
+    engines = args.engine or ["custom"]
+    planned = len(engines) * len(scenarios) * len(configs) * args.trials
+    print(f"Plan: {len(engines)} engines x {len(scenarios)} scenarios x {len(configs)} configs x "
+          f"{args.trials} trials = {planned} agent runs")
     print(f"Rough estimate: ~${planned * EST_COST_PER_RUN_USD:.2f} (cap: ${args.max_cost:.2f})")
     if not args.yes:
         print("Nothing run. Re-run with --yes to call the API.")
@@ -149,7 +154,7 @@ def main() -> None:
     results: list[dict] = []
     spent = 0.0
 
-    for config in configs:
+    for engine, config in [(e, c) for e in engines for c in configs]:
         for scenario in scenarios:
             for trial in range(1, args.trials + 1):
                 if spent >= args.max_cost:
@@ -157,16 +162,18 @@ def main() -> None:
                     break
                 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
                     record, result = _run_trial(
-                        client, scenario, config, trial, Path(tmp), not args.no_judge, judge_tracker
+                        client, scenario, engine, config, trial, Path(tmp), not args.no_judge, judge_tracker
                     )
                 record.save(runs_dir)
-                result.update({"config": config, "scenario": scenario.id, "trial": trial, "run_id": record.run_id})
+                label = config if engine == "custom" else f"{engine}/{config}"
+                result.update({"config": label, "engine": engine, "scenario": scenario.id, "trial": trial,
+                               "run_id": record.run_id})
                 results.append(result)
                 spent = sum(r["cost_usd"] for r in results) + judge_tracker.total_cost
                 status = "PASS" if result["task_completed"] else "FAIL"
-                print(f"[{status}] {config:9s} {scenario.id:17s} #{trial}  ${result['cost_usd']:.3f}  "
+                print(f"[{status}] {label:19s} {scenario.id:17s} #{trial}  ${result['cost_usd']:.3f}  "
                       f"{result['duration_s']:.0f}s  (total ${spent:.2f})")
-                if args.record_golden and result["task_completed"] and not result.get("judge_error"):
+                if args.record_golden and engine == "custom" and result["task_completed"] and not result.get("judge_error"):
                     effective = {tuple(h) for h in result["holds"]}
                     record_golden(scenario.id, record, effective)
 

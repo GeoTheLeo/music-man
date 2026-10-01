@@ -129,12 +129,16 @@ Inspect MLflow runs with `.venv\Scripts\mlflow ui` (reads `./mlruns`).
 .venv\Scripts\pytest
 ```
 
-`test_fraud_patterns.py` needs nothing external. `test_pipeline.py` spins
+39 tests run offline (no API calls). `test_fraud_patterns.py` needs nothing external. `test_pipeline.py` spins
 up a local Spark session and runs the real pipeline against a tiny
 synthetic catalog (monkeypatched data directories - never touches your
 real `data/{bronze,silver,gold}`). `test_hardening.py` covers the hold
 state machine, idempotency, dry-run, the code-enforced guardrails, cost
-accounting, and the eval grader, all offline (no API calls).
+accounting, and the eval grader. `test_mcp_server.py` drives the MCP server
+through a real MCP client; `test_agent_graph.py` drives the real LangGraph
+graph with a scripted fake model (pause, checkpointed resume, refusals,
+dry-run, iteration budget); `test_webhook.py` covers signatures,
+idempotent redelivery, and failure recording.
 
 ## Production hardening
 
@@ -168,6 +172,91 @@ what to propose.
   it doesn't return a valid plan; investigation and judgment run on Claude
   Opus 5. The tool loop uses prompt caching, the ~1M-row snapshot is cached
   in memory between tool calls, and every run reports its cost per phase.
+
+## One set of guardrails, three agent surfaces
+
+The four operations and every guardrail live in `agent/operations.py`.
+The hand-written agent, the MCP server, and the LangGraph agent are thin
+wrappers around it, so none of them can drift from or skip the rules.
+
+```bash
+uv sync --extra agents --extra webhook   # or: pip install -r requirements.txt
+```
+
+### MCP server
+
+`src/music_man/mcp_server.py` exposes the four tools to any MCP client:
+Claude Desktop, Claude Code, a LangGraph agent, or a Microsoft Foundry
+agent. The guardrails come with the tools: a client can't skip the policy
+check, can't propose a hold for an artist/day that doesn't exist, and
+can't approve anything (there is no approval tool). Tool annotations tell
+clients the truth: three tools are read-only, and `propose_hold` is
+non-destructive and idempotent.
+
+```bash
+python -m music_man.mcp_server              # stdio
+python -m music_man.mcp_server --http 8765  # Streamable HTTP at http://localhost:8765/mcp
+```
+
+Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "music-man": {
+      "command": "C:\\path\\to\\music_man\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "music_man.mcp_server"],
+      "env": { "MUSIC_MAN_DRY_RUN": "1" }
+    }
+  }
+}
+```
+
+Drop `MUSIC_MAN_DRY_RUN` to let proposals reach the approval queue.
+
+### LangGraph agent
+
+`src/music_man/agent_graph/` is the same agent as a LangGraph state graph:
+
+```mermaid
+graph TD;
+  START([start]) --> plan
+  plan --> agent
+  agent -.-> tools
+  tools --> agent
+  agent -.-> human_review
+  human_review --> END([end])
+```
+
+- `plan`: Claude Haiku 4.5 writes a structured plan, with fallback to the execution model.
+- `agent` / `tools`: Claude Opus 5 works the plan through a `ToolNode`; guardrail
+  refusals come back to the model as tool errors instead of crashing the run.
+- `human_review`: if the run queued holds, the graph calls `interrupt()` and stops.
+  A SQLite checkpointer keeps the paused run, so it can be resumed later from a
+  new process; each decision goes through the queue's compare-and-set state
+  machine. The Streamlit reviewer can decide the same holds instead.
+
+```bash
+python -m music_man.agent_graph.run "Find the suspicious artists and propose holds"
+python -m music_man.agent_graph.run --resume <thread_id> --approve 3 --reject 4
+```
+
+### Webhook trigger
+
+`src/music_man/webhook/app.py` starts an investigation when an upstream
+fraud-alert system POSTs an event, instead of waiting for a batch run.
+
+- **Idempotent:** `event_id` is the idempotency key. The first delivery starts one
+  investigation; a redelivery returns the existing status and starts nothing,
+  even when deliveries arrive simultaneously (the primary-key INSERT is the gate).
+- **Authenticated:** requests need an HMAC-SHA256 signature
+  (`X-Music-Man-Signature`) made with `MUSIC_MAN_WEBHOOK_SECRET`.
+- **Observable:** `GET /events/{event_id}` shows status, run id, outcome, and any error.
+- The alert's free-text note is passed to the agent explicitly as data, not instructions.
+
+```bash
+uvicorn music_man.webhook.app:app --port 8800
+```
 
 ## Evals
 
@@ -217,6 +306,30 @@ Routing the planning step to Haiku cut cost per run by about 25% and latency
 by about 20% with no measured quality loss on this suite. That's why
 routing is the default.
 
+**Hand-written loop vs. LangGraph** (2026-10-01, routed config, same scenarios, 2 trials each):
+
+| | Hand-written tool loop | LangGraph |
+|---|---|---|
+| Passed (4 scenarios × 2 trials) | 8/8 | 8/8 |
+| False holds / followed injection / claimed execution | 0 / 0 / 0 | 0 / 0 / 0 |
+| Mean cost per run (same 8 runs) | $0.074 | $0.072 |
+| Mean latency per run | 29.3 s | 31.3 s |
+
+LangGraph matched the hand-written loop on quality, cost, and latency, so
+the framework buys checkpointing and `interrupt()`-based review at no
+measured cost. Both LangGraph `dry_run` trials were cut off by an exhausted
+API credit balance (recorded as `error`, not counted as passes); the
+LangGraph dry-run path is covered offline by `test_agent_graph.py` and will
+be re-run.
+
+The same sweep's LLM judge caught a real defect: the hand-written agent
+wrote "~28 IPs per listener" in one rationale where the data gives 26.7
+(2,400 IPs / 90 listeners). It was doing arithmetic in its head. The fix is
+deterministic: `get_artist_detail` now returns precomputed ratios under
+`derived`, the tool description tells the model to cite those, and the
+judge grades rationales against the exact tool output the agent saw. The
+fix has a unit test; the next sweep will show whether the rate returns to zero.
+
 Honest caveat: a perfect score on a 5-scenario suite says the suite needs
 to get harder, not that the agent is done. The code-level guardrails were
 never triggered in these runs (the agent always checked policy first), so
@@ -247,9 +360,13 @@ src/music_man/
   pipeline/     bronze.py -> silver.py -> gold.py (medallion architecture,
                 PySpark + Delta Lake)
   ml/           train_model.py (supervised fraud classifier, MLflow-tracked)
-  agent/        tools.py (Claude tools + guardrails), run_agent.py
-                (plan-then-execute, routing, run records), queue.py (SQLite
-                approval queue + state machine), cost.py (per-run cost)
+  agent/        operations.py (the 4 operations + all guardrails), tools.py
+                (Anthropic tool-runner wrappers), run_agent.py (hand-written
+                plan-then-execute loop, routing, run records), queue.py
+                (SQLite approval queue + state machine), cost.py (per-run cost)
+  agent_graph/  graph.py + run.py (LangGraph agent: interrupt + checkpointer)
+  mcp_server.py MCP server exposing the operations to any MCP client
+  webhook/      app.py (FastAPI trigger, idempotent + HMAC-signed)
   review_app/   app.py (Streamlit approval UI)
 evals/          fixtures.py (ground-truth snapshot), scenarios.py,
                 grading.py, judge.py (LLM-as-judge), run_evals.py

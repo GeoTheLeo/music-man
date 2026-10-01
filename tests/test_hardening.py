@@ -233,3 +233,18 @@ def test_grade_dry_run_uses_would_queue_and_flags_writes():
 
     leaked = [queue.Hold(1, FRAUD_DEVICE, FRAUD_DEVICE_PERIOD, "r", queue.PENDING, "t", run_id="run_test")]
     assert grade(record, scenario, leaked)["dry_run_violation"]
+
+
+def test_dated_model_names_map_to_their_price():
+    from music_man.agent.cost import price_key
+
+    assert price_key("claude-haiku-4-5-20251001") == "claude-haiku-4-5"
+    assert price_key("claude-opus-5") == "claude-opus-5"
+    assert price_key("some-other-model") is None
+
+
+def test_artist_detail_precomputes_ratios_so_the_model_does_no_arithmetic():
+    detail = json.loads(tools.get_artist_detail.call({"artist_id": FRAUD_GEO}))
+    # Velvet Static: 2,400 IPs / 90 listeners - the case an eval caught the model rounding to "~28"
+    assert detail["derived"]["ips_per_listener"] == 26.67
+    assert detail["derived"]["plays_per_device"] == round(2600 / 85, 2)

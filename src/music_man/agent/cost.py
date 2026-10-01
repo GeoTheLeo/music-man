@@ -21,6 +21,13 @@ CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.10
 
 
+def price_key(model: str) -> str | None:
+    """Map a reported model name (which may carry a date suffix) to its price-table key."""
+    if model in PRICES_PER_MTOK:
+        return model
+    return next((key for key in PRICES_PER_MTOK if model.startswith(key)), None)
+
+
 def call_cost(model: str, usage) -> float:
     """USD cost of one API response, from its usage block."""
     if model not in PRICES_PER_MTOK:

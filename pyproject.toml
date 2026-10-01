@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "music-man"
-version = "0.2.0"
+version = "0.3.0"
 description = "Music-streaming royalty-fraud lakehouse: PySpark/Delta Lake/MLflow pipeline with an agentic, human-approved fraud-hold copilot."
 requires-python = ">=3.11"
 # Serving layer only (agent, approval queue, review app, evals) - small
@@ -14,7 +14,7 @@ dependencies = [
     "pandas==2.2.3",
     "numpy==1.26.4",
     "pyarrow==17.0.0",
-    "pydantic==2.9.2",
+    "pydantic==2.13.5",
     "python-dotenv==1.0.1",
     "streamlit==1.58.0",
 ]
@@ -29,8 +29,19 @@ pipeline = [
     "kagglehub==1.0.2",
 ]
 
+agents = [
+    "langgraph==1.2.12",
+    "langgraph-checkpoint-sqlite==3.1.1",
+    "langchain-anthropic==1.7.5",
+    "mcp==2.2.0",
+]
+webhook = [
+    "fastapi==0.142.2",
+    "uvicorn==0.53.0",
+]
+
 [dependency-groups]
-dev = ["pytest==8.3.3"]
+dev = ["pytest==8.3.3", "httpx"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

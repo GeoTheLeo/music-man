@@ -13,7 +13,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /bin/uv
 
 WORKDIR /app
 COPY pyproject.toml ./
-RUN uv pip install --system --no-cache -r pyproject.toml
+RUN uv pip install --system --no-cache -r pyproject.toml --extra agents --extra webhook
 
 COPY src ./src
 COPY evals ./evals

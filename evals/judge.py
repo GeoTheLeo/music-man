@@ -49,10 +49,14 @@ class JudgeVerdict(BaseModel):
 def judge_run(client: anthropic.Anthropic, record: RunRecord, tracker: UsageTracker) -> JudgeVerdict:
     snapshot = build_snapshot()
     proposals = [p for p in record.proposals() if not p["is_error"]]
+    seen = {}  # what the agent actually saw: its get_artist_detail results, including derived ratios
+    for call in record.tool_calls:
+        if call.name == "get_artist_detail" and not call.is_error:
+            seen.setdefault(call.input.get("artist_id"), []).append(json.loads(call.result))
     evidence = []
     for p in proposals:
         artist_id = p["input"].get("artist_id")
-        rows = snapshot[snapshot["artist_id"] == artist_id].to_dict(orient="records")
+        rows = seen.get(artist_id) or snapshot[snapshot["artist_id"] == artist_id].to_dict(orient="records")
         evidence.append({"artist_id": artist_id, "period": p["input"].get("period"),
                          "rationale": p["input"].get("rationale"), "data_rows": rows})
 

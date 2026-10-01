@@ -38,7 +38,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
 from music_man.agent import tools as agent_tools
-from music_man.agent.cost import PRICES_PER_MTOK, UsageTracker
+from music_man.agent.cost import UsageTracker, price_key
 from music_man.paths import DATA_DIR
 
 # override=True: this shell environment can have an empty ANTHROPIC_API_KEY
@@ -127,6 +127,7 @@ class RunRecord:
     plan_model: str
     exec_model: str
     dry_run: bool
+    engine: str = "custom"  # custom (hand-written tool loop) | langgraph
     plan: list[dict] = field(default_factory=list)
     plan_fallback_used: bool = False
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
@@ -251,7 +252,7 @@ def run_agent(
             last_message = message
             record.iterations += 1
             # A refusal fallback can serve a turn on a different model; bill it at that model's price.
-            served_by = message.model if message.model in PRICES_PER_MTOK else exec_model
+            served_by = price_key(message.model) or exec_model
             tracker.add("execute", served_by, message.usage)
             pending_calls = {}
             for block in message.content:

@@ -51,3 +51,5 @@ evals/reports/
 data/runs/
 data/*.bak
 evals/reports/
+data/graph_checkpoints.db*
+data/webhook_events.db
