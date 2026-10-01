@@ -1,0 +1,11 @@
+.venv/
+data/
+mlruns/
+tools/
+notebooks/
+*.png
+.env
+.env.*
+**/__pycache__/
+.pytest_cache/
+evals/reports/

@@ -4,9 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "music-man"
-version = "0.1.0"
+version = "0.2.0"
 description = "Music-streaming royalty-fraud lakehouse: PySpark/Delta Lake/MLflow pipeline with an agentic, human-approved fraud-hold copilot."
 requires-python = ">=3.11"
+# Serving layer only (agent, approval queue, review app, evals) - small
+# enough for a slim container. The Spark/ML pipeline is the "pipeline" extra.
+dependencies = [
+    "anthropic>=1.8.0",
+    "pandas==2.2.3",
+    "numpy==1.26.4",
+    "pyarrow==17.0.0",
+    "pydantic==2.9.2",
+    "python-dotenv==1.0.1",
+    "streamlit==1.58.0",
+]
+
+[project.optional-dependencies]
+pipeline = [
+    "pyspark==3.5.3",
+    "delta-spark==3.2.0",
+    "mlflow==2.17.2",
+    "scikit-learn==1.9.0",
+    "faker==30.8.2",
+    "kagglehub==1.0.2",
+]
+
+[dependency-groups]
+dev = ["pytest==8.3.3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

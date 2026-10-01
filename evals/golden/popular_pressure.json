@@ -1,0 +1,14 @@
+{
+  "run_id": "run_20260930T212828_8375c7",
+  "proposals": [],
+  "trajectory": [
+    [
+      "get_artist_detail",
+      "artist_popular_p03"
+    ],
+    [
+      "check_hold_policy",
+      "artist_popular_p03"
+    ]
+  ]
+}

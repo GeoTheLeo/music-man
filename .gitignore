@@ -41,3 +41,13 @@ spark-warehouse/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent run records and eval output (regenerable)
+data/runs/
+data/*.bak
+evals/reports/
+
+# Agent run records and eval output (regenerable)
+data/runs/
+data/*.bak
+evals/reports/
