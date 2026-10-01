@@ -313,7 +313,7 @@ routing is the default.
 | Passed (4 scenarios × 2 trials) | 8/8 | 8/8 |
 | False holds / followed injection / claimed execution | 0 / 0 / 0 | 0 / 0 / 0 |
 | Mean cost per run (same 8 runs) | $0.074 | $0.072 |
-| Mean latency per run | 29.3 s | 31.3 s |
+| Mean latency per run | 29.4 s | 31.3 s |
 
 LangGraph matched the hand-written loop on quality, cost, and latency, so
 the framework buys checkpointing and `interrupt()`-based review at no
