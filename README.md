@@ -129,7 +129,7 @@ Inspect MLflow runs with `.venv\Scripts\mlflow ui` (reads `./mlruns`).
 .venv\Scripts\pytest
 ```
 
-39 tests run offline (no API calls). `test_fraud_patterns.py` needs nothing external. `test_pipeline.py` spins
+45 tests run offline (no API calls). `test_fraud_patterns.py` needs nothing external. `test_pipeline.py` spins
 up a local Spark session and runs the real pipeline against a tiny
 synthetic catalog (monkeypatched data directories - never touches your
 real `data/{bronze,silver,gold}`). `test_hardening.py` covers the hold
@@ -258,6 +258,33 @@ fraud-alert system POSTs an event, instead of waiting for a batch run.
 uvicorn music_man.webhook.app:app --port 8800
 ```
 
+## Observability dashboard
+
+`src/music_man/observability/app.py` is the page you open during an
+incident: token usage, estimated cost, latency, failures, and retries per
+model, across every recorded run (live, webhook-triggered, and eval), with
+recent failures first and a drill-down into any run's plan and tool-call
+trace.
+
+![Agent observability dashboard](docs/observability_dashboard.png)
+
+```bash
+streamlit run src/music_man/observability/app.py
+```
+
+- **Failures are classified for the person on call:** billing, rate limit,
+  provider error, timeout, iteration budget, refusal, or application error,
+  parsed from the HTTP status the SDK reported.
+- **Retries are measured, not inferred:** a request hook on the SDK's HTTP
+  client counts every attempt, so retries = HTTP requests - API responses
+  (tested against a simulated 529 + retry).
+- **Cost and tokens per model**, including cache reads and writes, from each
+  run's usage breakdown.
+- A committed sample (`evals/sample_runs/`, the engine-comparison sweep) means
+  a fresh clone has data to show. That sample includes two real incidents: the
+  runs that died when the API credit ran out, which the dashboard flags as
+  `billing` at the top.
+
 ## Evals
 
 `evals/` runs the agent against a hand-built fixture snapshot with known
@@ -367,6 +394,7 @@ src/music_man/
   agent_graph/  graph.py + run.py (LangGraph agent: interrupt + checkpointer)
   mcp_server.py MCP server exposing the operations to any MCP client
   webhook/      app.py (FastAPI trigger, idempotent + HMAC-signed)
+  observability/ data.py + app.py (run-record loader + Streamlit incident dashboard)
   review_app/   app.py (Streamlit approval UI)
 evals/          fixtures.py (ground-truth snapshot), scenarios.py,
                 grading.py, judge.py (LLM-as-judge), run_evals.py

@@ -158,8 +158,26 @@ class RunRecord:
         return path
 
 
+class RequestCounter:
+    """Counts HTTP requests the SDK actually sends, so retries show up in run records:
+    retries = HTTP requests - API calls that returned a response."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def __call__(self, request) -> None:
+        self.count += 1
+
+
 def make_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(max_retries=MAX_RETRIES, timeout=REQUEST_TIMEOUT_S)
+    counter = RequestCounter()
+    client = anthropic.Anthropic(
+        max_retries=MAX_RETRIES,
+        timeout=REQUEST_TIMEOUT_S,
+        http_client=anthropic.DefaultHttpxClient(event_hooks={"request": [counter]}),
+    )
+    client.request_counter = counter
+    return client
 
 
 def plan_phase(
@@ -209,6 +227,8 @@ def run_agent(
     )
     tracker = UsageTracker()
     agent_tools.start_run(record.run_id, dry_run=dry_run)
+    counter = getattr(client, "request_counter", None)
+    requests_before = counter.count if counter else 0
     started = time.monotonic()
     say = print if verbose else (lambda *a, **k: None)
 
@@ -293,6 +313,11 @@ def run_agent(
     finally:
         record.duration_s = round(time.monotonic() - started, 2)
         record.usage = tracker.summary()
+        if counter is not None:
+            http_requests = counter.count - requests_before
+            record.usage["http_requests"] = http_requests
+            # a failed final attempt has no usage block, so it counts as a retry-or-failure, never below zero
+            record.usage["retries"] = max(0, http_requests - record.usage["api_calls"])
         if save:
             path = record.save()
             say(f"\n\n[run] {record.outcome} in {record.duration_s}s, {record.iterations} iterations, "

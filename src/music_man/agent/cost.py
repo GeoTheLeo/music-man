@@ -66,9 +66,22 @@ class UsageTracker:
 
     def summary(self) -> dict:
         by_phase: dict[str, float] = {}
+        by_model: dict[str, dict] = {}
         for c in self.calls:
             by_phase[c["phase"]] = by_phase.get(c["phase"], 0.0) + c["cost_usd"]
+            m = by_model.setdefault(
+                c["model"],
+                {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+                 "cache_creation_input_tokens": 0, "cost_usd": 0.0},
+            )
+            m["calls"] += 1
+            for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+                m[key] += c[key]
+            m["cost_usd"] += c["cost_usd"]
+        for m in by_model.values():
+            m["cost_usd"] = round(m["cost_usd"], 6)
         return {
+            "by_model": by_model,
             "api_calls": len(self.calls),
             "input_tokens": sum(c["input_tokens"] for c in self.calls),
             "output_tokens": sum(c["output_tokens"] for c in self.calls),

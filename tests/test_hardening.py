@@ -248,3 +248,39 @@ def test_artist_detail_precomputes_ratios_so_the_model_does_no_arithmetic():
     # Velvet Static: 2,400 IPs / 90 listeners - the case an eval caught the model rounding to "~28"
     assert detail["derived"]["ips_per_listener"] == 26.67
     assert detail["derived"]["plays_per_device"] == round(2600 / 85, 2)
+
+
+def test_request_counter_sees_sdk_retries():
+    import anthropic
+    import httpx2
+
+    from music_man.agent.run_agent import RequestCounter
+
+    responses = iter([
+        httpx2.Response(529, json={"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}),
+        httpx2.Response(200, json={
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-haiku-4-5",
+            "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn", "stop_sequence": None,
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }),
+    ])
+    counter = RequestCounter()
+    client = anthropic.Anthropic(
+        api_key="test", max_retries=2,
+        http_client=anthropic.DefaultHttpxClient(
+            transport=httpx2.MockTransport(lambda request: next(responses)),
+            event_hooks={"request": [counter]},
+        ),
+    )
+    client.messages.create(model="claude-haiku-4-5", max_tokens=5, messages=[{"role": "user", "content": "hi"}])
+    assert counter.count == 2  # one overloaded attempt + one success = one retry
+
+
+def test_usage_summary_breaks_down_by_model():
+    tracker = UsageTracker()
+    tracker.add("plan", "claude-haiku-4-5", SimpleNamespace(input_tokens=100, output_tokens=10))
+    tracker.add("execute", "claude-opus-5", SimpleNamespace(input_tokens=200, output_tokens=20,
+                                                            cache_read_input_tokens=500))
+    by_model = tracker.summary()["by_model"]
+    assert by_model["claude-opus-5"]["cache_read_input_tokens"] == 500
+    assert by_model["claude-haiku-4-5"]["calls"] == 1

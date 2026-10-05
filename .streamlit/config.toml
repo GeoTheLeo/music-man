@@ -1,0 +1,5 @@
+[theme]
+base = "dark"
+backgroundColor = "#0e1117"
+# Blue accent: Streamlit's default red reads as "error" on a monitoring page.
+primaryColor = "#3987e5"
