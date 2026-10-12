@@ -1,5 +1,5 @@
 """
-The four fraud-investigation operations and their guardrails, framework-free.
+The five fraud-investigation operations and their guardrails, framework-free.
 
 Every agent surface wraps these same functions:
 - agent/tools.py: Anthropic tool runner (the hand-written plan-then-execute agent)
@@ -162,6 +162,48 @@ def get_artist_detail(artist_id: str) -> str:
     return json.dumps(detail)
 
 
+def find_fraud_ring(artist_id: str, period: str = "") -> str:
+    """Find bot rings (accounts linked by shared devices) that streamed this artist, from the Neo4j fraud graph.
+
+    Use this to corroborate a suspicion: whether the artist's plays came from
+    accounts that share devices with each other, how large that ring is, and
+    which other artists the same ring streamed (a sign of one coordinated
+    operator). No ring is not proof of innocence: some bot patterns use a
+    fresh device per account and leave no ring.
+
+    Args:
+        artist_id: The artist's canonical ID.
+        period: Optional ISO date (e.g. "2026-02-14") to limit to one day; empty for all days.
+    """
+    if period:
+        _validate_period(period)
+    try:
+        from music_man.graph import store
+
+        driver = store.get_driver()
+        try:
+            rings = store.find_rings_for_artist(driver, artist_id, period or None)
+        finally:
+            driver.close()
+    except Exception as exc:  # driver missing, Neo4j down, auth failure
+        raise GuardrailError(
+            f"fraud graph unavailable ({type(exc).__name__}); continue the investigation without ring evidence"
+        ) from exc
+
+    return json.dumps(
+        {
+            "artist_id": artist_id,
+            "period": period or "all",
+            "rings": rings,
+            "note": (
+                "Rings are accounts linked through shared devices (GDS weakly connected components)."
+                if rings
+                else "No suspicious device-sharing ring streamed this artist in this period."
+            ),
+        }
+    )
+
+
 def check_hold_policy(artist_id: str, period: str) -> str:
     """Check whether a new royalty hold is allowed for an artist/period right now.
 
@@ -241,4 +283,4 @@ def propose_hold(artist_id: str, period: str, rationale: str) -> str:
     )
 
 
-OPERATIONS = [list_flagged_artists, get_artist_detail, check_hold_policy, propose_hold]
+OPERATIONS = [list_flagged_artists, get_artist_detail, find_fraud_ring, check_hold_policy, propose_hold]

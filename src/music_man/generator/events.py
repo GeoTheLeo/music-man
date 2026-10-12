@@ -97,8 +97,12 @@ def inject_fraud_events(
     """
     Picks `n_cases` random (artist, track) targets, applies one fraud
     pattern to each, and returns (fraud_events, fraud_labels). fraud_labels
-    is the ground truth used to train/evaluate the model - ["artist_id",
-    "track_id", "period", "pattern"].
+    is the ground truth used to train/evaluate the model - ["case_id",
+    "artist_id", "track_id", "period", "pattern"], one row for every day a
+    case's injected events touch. An attack that starts late in the day
+    spills past midnight; labelling only its first day marked the second
+    day as clean, which showed up as model "false positives" that were in
+    fact real bot traffic (found via the fraud-ring graph).
     """
     rng = random.Random(seed)
     targets = catalog.sample(n=n_cases, random_state=seed).reset_index(drop=True)
@@ -110,20 +114,22 @@ def inject_fraud_events(
     all_events: list[dict] = []
     labels: list[dict] = []
 
-    for _, row in targets.iterrows():
+    for case_id, row in targets.iterrows():
         pattern = rng.choice(FRAUD_PATTERNS)
         window_start = start_ts + pd.Timedelta(seconds=rng.randint(0, span_seconds))
         generator = PATTERN_GENERATORS[pattern]
         events = generator(row["track_id"], row["artist_id"], int(row["duration_ms"]), window_start, rng)
         all_events.extend(events)
-        labels.append(
-            {
-                "artist_id": row["artist_id"],
-                "track_id": row["track_id"],
-                "period": window_start.date().isoformat(),
-                "pattern": pattern,
-            }
-        )
+        for day in sorted({event["played_at"].date().isoformat() for event in events}):
+            labels.append(
+                {
+                    "case_id": int(case_id),
+                    "artist_id": row["artist_id"],
+                    "track_id": row["track_id"],
+                    "period": day,
+                    "pattern": pattern,
+                }
+            )
 
     fraud_df = pd.DataFrame(all_events, columns=EVENT_COLUMNS)
     labels_df = pd.DataFrame(labels)

@@ -1,0 +1,57 @@
+{
+  "labels_first_day_only": {
+    "baseline": {
+      "precision": 0.7692307692307693,
+      "recall": 1.0,
+      "f1": 0.8695652173913043,
+      "false_positives": 3,
+      "false_negatives": 0,
+      "test_fraud_cases": 10,
+      "cv5_precision": 0.6737817737817738,
+      "cv5_recall": 0.9,
+      "cv5_f1": 0.756656346749226
+    },
+    "graph": {
+      "precision": 0.7,
+      "recall": 0.7,
+      "f1": 0.7,
+      "false_positives": 3,
+      "false_negatives": 3,
+      "test_fraud_cases": 10,
+      "cv5_precision": 0.6737817737817738,
+      "cv5_recall": 0.9,
+      "cv5_f1": 0.756656346749226
+    }
+  },
+  "labels_every_day_touched": {
+    "baseline": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "test_fraud_cases": 15,
+      "cv5_precision": 1.0,
+      "cv5_recall": 0.9833333333333334,
+      "cv5_f1": 0.9913043478260869
+    },
+    "graph": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "test_fraud_cases": 15,
+      "cv5_precision": 1.0,
+      "cv5_recall": 0.9833333333333334,
+      "cv5_f1": 0.9913043478260869
+    }
+  },
+  "out_of_fold_false_positive_audit_first_day_labels": {
+    "false_positives": 20,
+    "day_after_a_labelled_attack_day": 20,
+    "with_ring_play_share_over_0_7": 14,
+    "with_no_ring_plays_geo_impossible_pattern": 6
+  },
+  "note": "Same held-out split (random_state=42, stratified 25%) and 5-fold stratified CV for every row. GradientBoostingClassifier defaults."
+}

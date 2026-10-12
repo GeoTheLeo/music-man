@@ -16,7 +16,8 @@ Verified against the actual public catalog and a full pipeline run:
 
 - **89,740 real tracks, 31,428 real artists** seeded from a public Kaggle Spotify dataset
 - **2.1M synthetic play events** processed through the full bronze → silver → gold medallion pipeline on local PySpark + Delta Lake
-- **40 injected fraud cases** across 4 distinct bot-farm signatures — the trained classifier caught **100% of them (recall 1.0)** on a held-out test split, at **67% precision**. The false positives are genuinely popular artists whose scale overlaps with the fraud signature — which is exactly the argument for why a human reviews every hold before it takes effect, not a flaw to hide.
+- **40 injected fraud cases** across 4 distinct bot-farm signatures, labelled on all 60 artist-days they touch — the trained classifier scores **precision 1.0 and recall 1.0** on a held-out split (5-fold CV: precision 1.0, recall 0.98).
+- **A labelling bug, found with a graph.** The classifier first appeared to score 0.67–0.77 precision, and this README used to call the false positives "genuinely popular artists". Building a Neo4j fraud-ring graph showed otherwise: **all 20 out-of-fold "false positives" were the second day of a real attack** that ran past midnight, and 14 of them drew 72–100% of their plays from shared-device bot rings. The generator had labelled only each attack's first day. With every touched day labelled, precision is 1.0 — the model was right; the labels were wrong. See [Fraud-ring graph](#fraud-ring-graph-neo4j).
 
 **A real excerpt from a live agent run** — it didn't just call tools in sequence, it caught a problem in my own synthetic-data generator mid-investigation:
 
@@ -106,15 +107,22 @@ gets reset every time (`java.net.SocketException: Connection reset`).
 # 3. Aggregate to per-artist/day fraud-signal features -> gold.
 .venv\Scripts\python -m music_man.pipeline.gold
 
-# 4. Train the fraud classifier (MLflow-tracked) and write anomaly_score
+# 4. Build the fraud-ring graph in Neo4j (needs Docker; see "Fraud-ring
+#    graph" below) and write ring features to gold. Optional: the agent's
+#    find_fraud_ring tool degrades gracefully without it.
+docker compose -f docker-compose.neo4j.yml up -d
+.venv\Scripts\python -m music_man.graph.build_graph
+
+# 5. Train the fraud classifier (MLflow-tracked) and write anomaly_score
 #    back into the gold table + a Parquet snapshot for the agent.
+#    --compare scores baseline vs. graph features on the same split.
 .venv\Scripts\python -m music_man.ml.train_model
 
-# 5. Run the agent - plans, investigates, proposes a hold (never executes).
+# 6. Run the agent - plans, investigates, proposes a hold (never executes).
 #    Add --dry-run to investigate without queuing anything.
 .venv\Scripts\python -m music_man.agent.run_agent "Find the most suspicious artist and propose a hold if warranted."
 
-# 6. Review and approve/reject proposed holds (and release approved ones).
+# 7. Review and approve/reject proposed holds (and release approved ones).
 .venv\Scripts\streamlit run src/music_man/review_app/app.py
 ```
 
@@ -375,6 +383,60 @@ docker run --rm -p 8501:8501 -v ./data:/app/data music-man
 docker run --rm --env-file .env -v ./data:/app/data music-man python -m music_man.agent.run_agent --dry-run
 ```
 
+## Fraud-ring graph (Neo4j)
+
+Bot farms leave a structural fingerprint that per-artist aggregates can't
+see: many accounts sharing a few devices. Music Man loads the silver layer
+into Neo4j as a graph and finds those rings with Graph Data Science.
+
+```
+(:Account {ringId, ringAccounts, ringDevices})-[:USES {plays}]->(:Device)
+(:Account)-[:STREAMED {date, plays}]->(:Artist)     # accounts in suspicious rings only
+```
+
+- **Ring detection:** GDS weakly connected components over Account–Device.
+  2.1M events become 9,122 accounts, 14,002 devices, and 20,681 USES edges;
+  WCC finds 8,924 components, 5 of them suspicious (≥2 accounts sharing
+  devices, or one account on ≥5 devices). Organic listeners never share
+  devices, so they come out as rings of one.
+- **Graph features → gold:** per artist/day, the share of plays from
+  suspicious rings, the largest ring among listeners (accounts, devices), and
+  how many artists that ring streamed overall
+  (`gold/artist_daily_graph_features`).
+- **Agent tool:** `find_fraud_ring(artist_id, period)` runs a Cypher query
+  and returns each ring's size, shared devices, plays on the artist, and the
+  other artists the same ring streamed — evidence of one coordinated operator
+  (the duration-regularity ring: 150 accounts on 40 shared devices, streaming
+  12 artists). It's read-only and lives in `agent/operations.py`, so the
+  hand-written agent, the LangGraph agent, and the MCP server all get it; if
+  Neo4j is down it tells the agent to continue without ring evidence.
+
+**What the graph changed (measured, `docs/graph_feature_comparison.json`):**
+
+| | Labels | Held-out precision / recall | 5-fold CV precision / recall |
+|---|---|---|---|
+| Baseline features | first day only (original) | 0.77 / 1.00 | 0.67 / 0.90 |
+| Baseline + graph features | first day only (original) | 0.70 / 0.70 | 0.67 / 0.90 |
+| Baseline features | every day touched (fixed) | **1.00 / 1.00** | **1.00 / 0.98** |
+| Baseline + graph features | every day touched (fixed) | 1.00 / 1.00 | 1.00 / 0.98 |
+
+The graph's value here was **diagnostic**: it proved the "false positives"
+were real bot traffic and exposed the labelling bug (`generator/events.py`
+now labels every day an attack touches; `pipeline/relabel.py` migrates an
+existing dataset after verifying the recomputed cases match). Graph features
+add no lift on this synthetic data because the four signatures are already
+separable from aggregates, so the scoring model stays on the baseline
+features. Caveat: organic users here never share devices; in real data
+(families, shared tablets) ring features are noisier and need a threshold
+tuned on real traffic.
+
+**Running it:** `docker compose -f docker-compose.neo4j.yml up -d` (Neo4j
+5.26 + GDS; browser at http://localhost:7474, user `neo4j`, password
+`musicman-dev` or `NEO4J_PASSWORD`), then `python -m music_man.graph.build_graph`
+(about 2.5 minutes). The Neo4j integration tests wipe their database, so they
+only run against a disposable instance (`NEO4J_TEST_URI`; see
+`tests/test_graph.py`).
+
 ## Architecture
 
 ```
@@ -385,9 +447,12 @@ src/music_man/
                 (organic + fraud event stream), fraud_patterns.py (the 4
                 injectable fraud signatures)
   pipeline/     bronze.py -> silver.py -> gold.py (medallion architecture,
-                PySpark + Delta Lake)
-  ml/           train_model.py (supervised fraud classifier, MLflow-tracked)
-  agent/        operations.py (the 4 operations + all guardrails), tools.py
+                PySpark + Delta Lake); relabel.py (one-off label migration)
+  ml/           train_model.py (supervised fraud classifier, MLflow-tracked;
+                --compare scores feature sets on the same split)
+  graph/        store.py (Neo4j model, GDS ring detection, Cypher queries),
+                build_graph.py (silver -> Neo4j -> gold ring features)
+  agent/        operations.py (the 5 operations + all guardrails), tools.py
                 (Anthropic tool-runner wrappers), run_agent.py (hand-written
                 plan-then-execute loop, routing, run records), queue.py
                 (SQLite approval queue + state machine), cost.py (per-run cost)

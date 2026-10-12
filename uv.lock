@@ -1748,6 +1748,9 @@ agents = [
     { name = "langgraph-checkpoint-sqlite" },
     { name = "mcp" },
 ]
+graph = [
+    { name = "neo4j" },
+]
 pipeline = [
     { name = "delta-spark" },
     { name = "faker" },
@@ -1779,6 +1782,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-sqlite", marker = "extra == 'agents'", specifier = "==3.1.1" },
     { name = "mcp", marker = "extra == 'agents'", specifier = "==2.2.0" },
     { name = "mlflow", marker = "extra == 'pipeline'", specifier = "==2.17.2" },
+    { name = "neo4j", marker = "extra == 'graph'", specifier = ">=5.28,<6" },
     { name = "numpy", specifier = "==1.26.4" },
     { name = "pandas", specifier = "==2.2.3" },
     { name = "pyarrow", specifier = "==17.0.0" },
@@ -1789,7 +1793,7 @@ requires-dist = [
     { name = "streamlit", specifier = "==1.58.0" },
     { name = "uvicorn", marker = "extra == 'webhook'", specifier = "==0.53.0" },
 ]
-provides-extras = ["pipeline", "agents", "webhook"]
+provides-extras = ["pipeline", "agents", "webhook", "graph"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1804,6 +1808,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/35/68/5351e34623d253423240ea7de3f8fc74fa8ab14b1ab3c0ec4ac8997413c9/narwhals-2.26.0.tar.gz", hash = "sha256:6b9cadca82f375c7e4cf584fdc86ca25da54827307a9c58f94547ee6104b82dd", size = 686970, upload-time = "2026-09-08T13:32:08.964Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/40/b5/1b84b2c784db76d69442334bc8b8748c840f13ca53be086f4f250ad4a0bc/narwhals-2.26.0-py3-none-any.whl", hash = "sha256:29326d74f107c347fd1009bd58e38d9f7c7c5b51e6de97bc93dbc325d9038b54", size = 474034, upload-time = "2026-09-08T13:32:07.159Z" },
+]
+
+[[package]]
+name = "neo4j"
+version = "5.28.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytz" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/77/ea/a17b0df723422cb3124bd45e6570d9677eafa38ffa207c3d12f601cbb90e/neo4j-5.28.6.tar.gz", hash = "sha256:224020cb649517cba1b76bf94129ccf84de30e7005932b5ab0cdd9cb566d55b2", size = 233391, upload-time = "2026-09-15T08:47:07.57Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/9c/ec2a2f4b9fbb6c93d51c785a8c4e4cdca280009b7ad0821ff145e6cb02a5/neo4j-5.28.6-py3-none-any.whl", hash = "sha256:5454b51e0a1de870e7d0cc233b8897bb8b3a273fe32458ccbcde9d5a604f7437", size = 313892, upload-time = "2026-09-15T08:47:04.604Z" },
 ]
 
 [[package]]

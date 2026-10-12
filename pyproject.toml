@@ -39,6 +39,9 @@ webhook = [
     "fastapi==0.142.2",
     "uvicorn==0.53.0",
 ]
+graph = [
+    "neo4j>=5.28,<6",
+]
 
 [dependency-groups]
 dev = ["pytest==8.3.3", "httpx"]

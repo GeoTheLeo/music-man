@@ -15,7 +15,8 @@ from music_man.agent.operations import current_run, snapshot_path, start_run  # 
 
 list_flagged_artists = beta_tool(operations.list_flagged_artists)
 get_artist_detail = beta_tool(operations.get_artist_detail)
+find_fraud_ring = beta_tool(operations.find_fraud_ring)
 check_hold_policy = beta_tool(operations.check_hold_policy)
 propose_hold = beta_tool(operations.propose_hold)
 
-TOOLS = [list_flagged_artists, get_artist_detail, check_hold_policy, propose_hold]
+TOOLS = [list_flagged_artists, get_artist_detail, find_fraud_ring, check_hold_policy, propose_hold]

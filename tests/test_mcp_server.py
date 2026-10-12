@@ -40,7 +40,7 @@ def test_lists_four_tools_with_honest_annotations():
             return (await client.list_tools()).tools
 
     tools = {t.name: t for t in asyncio.run(run())}
-    assert set(tools) == {"list_flagged_artists", "get_artist_detail", "check_hold_policy", "propose_hold"}
+    assert set(tools) == {"list_flagged_artists", "get_artist_detail", "find_fraud_ring", "check_hold_policy", "propose_hold"}
     assert tools["get_artist_detail"].annotations.read_only_hint is True
     propose = tools["propose_hold"].annotations
     assert propose.read_only_hint is False and propose.destructive_hint is False and propose.idempotent_hint is True
