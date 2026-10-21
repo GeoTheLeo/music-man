@@ -9,6 +9,9 @@ investigation; any redelivery returns the existing event's status and
 starts nothing. That holds even for simultaneous deliveries, because the
 INSERT into a primary-keyed table is the gate, not a check-then-insert.
 
+Events live in SQLite locally, or in the shared Postgres when
+MUSIC_MAN_DATABASE_URL is set (see music_man.db).
+
 Requests must carry X-Music-Man-Signature: sha256=<HMAC of the raw body>
 using MUSIC_MAN_WEBHOOK_SECRET, so only the alert system can trigger runs.
 
@@ -23,13 +26,13 @@ import hashlib
 import hmac
 import json
 import os
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from music_man import db
 from music_man.paths import DATA_DIR
 
 app = FastAPI(title="Music Man webhook")
@@ -46,11 +49,8 @@ def _db_path() -> Path:
     return Path(override) if override else DATA_DIR / "webhook_events.db"
 
 
-def _connect() -> sqlite3.Connection:
-    path = _db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
+def _connect() -> db.Connection:
+    conn = db.connect(_db_path())
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS webhook_events (
@@ -64,6 +64,7 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    conn.commit()
     return conn
 
 
@@ -114,13 +115,12 @@ async def receive_event(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     with _connect() as conn:
-        try:
-            conn.execute(
-                "INSERT INTO webhook_events (event_id, payload, status, received_at) VALUES (?, ?, 'queued', ?)",
-                (alert.event_id, body.decode(), datetime.now(timezone.utc).isoformat()),
-            )
-            conn.commit()
-        except sqlite3.IntegrityError:
+        inserted = conn.try_insert(
+            "INSERT INTO webhook_events (event_id, payload, status, received_at) VALUES (?, ?, 'queued', ?)",
+            (alert.event_id, body.decode(), datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        if not inserted:
             existing = conn.execute("SELECT * FROM webhook_events WHERE event_id = ?", (alert.event_id,)).fetchone()
             return {"event_id": alert.event_id, "duplicate": True, "status": existing["status"], "run_id": existing["run_id"]}
 

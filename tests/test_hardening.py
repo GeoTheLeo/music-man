@@ -24,6 +24,7 @@ from evals.fixtures import (
 )
 from evals.grading import grade, ordering_violations
 from evals.scenarios import SCENARIOS_BY_ID
+from music_man import db
 from music_man.agent import queue, tools
 from music_man.agent.cost import UsageTracker, call_cost
 from music_man.agent.run_agent import RunRecord, ToolCallRecord
@@ -104,6 +105,8 @@ def test_create_hold_is_idempotent():
 
 
 def test_legacy_queue_db_is_migrated(tmp_path, monkeypatch):
+    if db.database_url():
+        pytest.skip("SQLite-file migration; not applicable when the suite runs on Postgres")
     legacy = tmp_path / "legacy.db"
     conn = sqlite3.connect(legacy)
     conn.execute(

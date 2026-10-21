@@ -1,0 +1,64 @@
+# Music Man as microservices on one machine: the same three services and
+# shared Postgres that infra/main.bicep deploys to Azure Container Apps.
+#
+#   docker compose up --build
+#     review app   http://localhost:8501
+#     MCP server   http://localhost:8765/mcp   (header X-API-Key: local-dev-key)
+#     webhook      http://localhost:8800/events
+#
+# ANTHROPIC_API_KEY (for webhook-triggered investigations) is read from .env
+# if present; the MCP server and review app don't need it.
+
+x-app: &app
+  build: .
+  image: music-man:local
+  env_file:
+    - path: .env
+      required: false
+  environment: &env
+    MUSIC_MAN_DATABASE_URL: postgresql://musicman:musicman@postgres:5432/musicman
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: musicman
+      POSTGRES_PASSWORD: musicman
+      POSTGRES_DB: musicman
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "musicman"]
+      interval: 2s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  mcp:
+    <<: *app
+    command: ["python", "-m", "music_man.mcp_server", "--http", "8765", "--host", "0.0.0.0"]
+    environment:
+      <<: *env
+      MUSIC_MAN_MCP_API_KEY: local-dev-key
+    ports: ["8765:8765"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/healthz')"]
+
+  webhook:
+    <<: *app
+    command: ["uvicorn", "music_man.webhook.app:app", "--host", "0.0.0.0", "--port", "8800"]
+    environment:
+      <<: *env
+      MUSIC_MAN_WEBHOOK_SECRET: local-dev-secret
+      MUSIC_MAN_DRY_RUN: "1"
+    ports: ["8800:8800"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8800/docs')"]
+
+  review:
+    <<: *app
+    ports: ["8501:8501"]
+
+volumes:
+  pgdata:

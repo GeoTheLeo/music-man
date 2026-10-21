@@ -1,5 +1,6 @@
 """
-SQLite-backed approval queue for proposed royalty holds. Mirrors the
+Approval queue for proposed royalty holds (SQLite locally, PostgreSQL when
+MUSIC_MAN_DATABASE_URL is set; see music_man.db). Mirrors the
 NorthStar Agentic Intervention Copilot's lib/db.ts pattern: propose_hold()
 only ever inserts a pending row here - approving/rejecting (done by a
 human in the Streamlit reviewer) is the only thing that has any real
@@ -23,11 +24,11 @@ of creating a duplicate.
 from __future__ import annotations
 
 import os
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from music_man import db
 from music_man.paths import QUEUE_DB_PATH
 
 PENDING = "pending_approval"
@@ -66,8 +67,8 @@ class Hold:
     release_reason: str | None = None
 
 
-# Columns added after the original schema; _connect() adds any that an
-# existing queue.db is missing.
+# Columns added after the original schema; _ensure_schema() adds any that an
+# existing database is missing.
 _MIGRATED_COLUMNS = {
     "run_id": "TEXT",
     "released_at": "TEXT",
@@ -86,15 +87,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _connect() -> sqlite3.Connection:
-    path = db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
+# Databases whose schema this process has already ensured. Running the DDL
+# once per process, not per connection, also keeps several services from
+# racing CREATE TABLE IF NOT EXISTS against one Postgres.
+_ready: set[str] = set()
+
+
+def _connect() -> db.Connection:
+    conn = db.connect(db_path())
+    key = db.database_url() or str(db_path())
+    if key not in _ready:
+        _ensure_schema(conn)
+        conn.commit()
+        _ready.add(key)
+    return conn
+
+
+def _ensure_schema(conn: db.Connection) -> None:
     conn.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS holds (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {conn.autoincrement_pk},
             artist_id TEXT NOT NULL,
             period TEXT NOT NULL,
             rationale TEXT NOT NULL,
@@ -105,7 +118,7 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(holds)")}
+    existing = conn.columns("holds")
     for column, column_type in _MIGRATED_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE holds ADD COLUMN {column} {column_type}")
@@ -117,10 +130,10 @@ def _connect() -> sqlite3.Connection:
         """
     )
     conn.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS hold_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            hold_id INTEGER NOT NULL REFERENCES holds(id),
+            id {conn.autoincrement_pk},
+            hold_id BIGINT NOT NULL REFERENCES holds(id),
             from_status TEXT,
             to_status TEXT NOT NULL,
             actor TEXT NOT NULL,
@@ -129,15 +142,14 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
-    return conn
 
 
-def _row_to_hold(row: sqlite3.Row) -> Hold:
+def _row_to_hold(row) -> Hold:
     return Hold(**{k: row[k] for k in row.keys()})
 
 
 def _record_event(
-    conn: sqlite3.Connection,
+    conn: db.Connection,
     hold_id: int,
     from_status: str | None,
     to_status: str,
@@ -174,20 +186,19 @@ def create_hold(
     rejects the insert and the existing hold is returned with created=False.
     """
     with _connect() as conn:
-        try:
-            cursor = conn.execute(
-                "INSERT INTO holds (artist_id, period, rationale, created_at, run_id) VALUES (?, ?, ?, ?, ?)",
-                (artist_id, period, rationale, _now(), run_id),
-            )
-        except sqlite3.IntegrityError:
+        hold_id = conn.try_insert(
+            "INSERT INTO holds (artist_id, period, rationale, created_at, run_id) VALUES (?, ?, ?, ?, ?)",
+            (artist_id, period, rationale, _now(), run_id),
+            returning_id=True,
+        )
+        if hold_id is None:
             existing = conn.execute(
                 "SELECT * FROM holds WHERE artist_id = ? AND period = ? AND status IN (?, ?)",
                 (artist_id, period, *ACTIVE_STATUSES),
             ).fetchone()
             return _row_to_hold(existing), False
-        _record_event(conn, cursor.lastrowid, None, PENDING, f"agent:{run_id or 'unknown'}")
+        _record_event(conn, hold_id, None, PENDING, f"agent:{run_id or 'unknown'}")
         conn.commit()
-        hold_id = cursor.lastrowid
     return get_hold(hold_id), True
 
 

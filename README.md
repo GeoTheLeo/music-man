@@ -300,6 +300,41 @@ fraud-alert system POSTs an event, instead of waiting for a batch run.
 uvicorn music_man.webhook.app:app --port 8800
 ```
 
+## Microservices and Azure deployment
+
+The serving layer runs as three services from one image, sharing one
+PostgreSQL store:
+
+| Service | Command | Protected by |
+|---|---|---|
+| MCP server | `python -m music_man.mcp_server --http 8765 --host 0.0.0.0` | `X-API-Key` header; refuses to serve beyond localhost without `MUSIC_MAN_MCP_API_KEY` |
+| Webhook | `uvicorn music_man.webhook.app:app --port 8800` | HMAC signature |
+| Review app | `streamlit run src/music_man/review_app/app.py` | Microsoft Entra sign-in (on Azure) |
+
+- **Shared state:** `MUSIC_MAN_DATABASE_URL=postgresql://...` moves the
+  approval queue and the webhook event log from per-process SQLite files to
+  Postgres (`music_man/db.py`). The state machine, compare-and-set
+  transitions, and idempotent inserts are unchanged. Unique-violation
+  handling uses a savepoint, because a failed statement aborts a Postgres
+  transaction. Unset, everything uses SQLite as before.
+- **Locally:** `docker compose up --build` runs Postgres plus all three
+  services.
+- **On Azure:** `infra/main.bicep` (infrastructure as code) defines Azure
+  Container Apps on the Consumption plan (scale to zero), Azure Container
+  Registry with managed-identity pulls (no registry passwords),
+  PostgreSQL Flexible Server, Log Analytics, Container Apps secrets, and
+  built-in Entra authentication for the review app. Without an Entra app
+  registration, the review app gets no public endpoint at all.
+  `bash infra/deploy.sh` runs it end to end.
+- **Microsoft Copilot Studio:** a Copilot Studio agent connects to the
+  deployed MCP server and inherits every guardrail. See
+  [docs/copilot_studio.md](docs/copilot_studio.md).
+- **Tests on Postgres:** `MUSIC_MAN_TEST_DATABASE_URL=postgresql://... pytest`
+  runs the suite with a fresh schema per test (see `tests/conftest.py`).
+
+The MCP server keeps one guardrail run per process (policy checks are
+remembered in memory), so it's deployed as a single replica.
+
 ## Observability dashboard
 
 `src/music_man/observability/app.py` is the page you open during an
@@ -493,9 +528,13 @@ src/music_man/
   agent_graph/  graph.py + run.py (LangGraph agent: interrupt + checkpointer)
   agent_agno/   agent.py + run.py (Agno agent: structured planner, turn budget)
   mcp_server.py MCP server exposing the operations to any MCP client
+                (stdio, or HTTP with API-key auth)
+  db.py         SQLite / PostgreSQL connection layer for the queue and webhook
   webhook/      app.py (FastAPI trigger, idempotent + HMAC-signed)
   observability/ data.py + app.py (run-record loader + Streamlit incident dashboard)
   review_app/   app.py (Streamlit approval UI)
+infra/         main.bicep (Azure Container Apps, ACR, PostgreSQL, Entra auth),
+                deploy.sh
 evals/          fixtures.py (ground-truth snapshot), scenarios.py,
                 grading.py, judge.py (LLM-as-judge), run_evals.py
 ```

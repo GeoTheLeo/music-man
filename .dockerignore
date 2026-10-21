@@ -1,5 +1,7 @@
 .venv/
-data/
+# Only the gold snapshot the agent reads is baked into the image.
+data/**
+!data/gold/artist_daily_metrics.snapshot.parquet
 mlruns/
 tools/
 notebooks/

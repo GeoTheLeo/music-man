@@ -43,6 +43,10 @@ webhook = [
 graph = [
     "neo4j>=5.28,<6",
 ]
+# Shared PostgreSQL store for the cloud deployment (MUSIC_MAN_DATABASE_URL).
+cloud = [
+    "psycopg[binary]==3.2.13",
+]
 
 [dependency-groups]
 dev = ["pytest==8.3.3", "httpx"]

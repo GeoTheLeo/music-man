@@ -8,22 +8,33 @@ doesn't exist, or approve anything - there is no approval tool. Proposals
 still land in the same approval queue the Streamlit reviewer reads.
 
 One server process is one guardrail run (policy checks are remembered per
-process). Set MUSIC_MAN_DRY_RUN=1 to expose propose_hold in dry-run mode.
+process), so a deployment runs a single replica. Set MUSIC_MAN_DRY_RUN=1 to
+expose propose_hold in dry-run mode.
 
     python -m music_man.mcp_server              # stdio (what Claude Desktop launches)
     python -m music_man.mcp_server --http 8765  # Streamable HTTP at http://localhost:8765/mcp
+    python -m music_man.mcp_server --http 8765 --host 0.0.0.0   # public: needs MUSIC_MAN_MCP_API_KEY
+
+Over HTTP, every request except GET /healthz must carry the API key in an
+X-API-Key header (Copilot Studio's "API key" authentication sends it there).
+Serving on anything but localhost without a key is refused, since
+propose_hold writes to the approval queue. MUSIC_MAN_MCP_ALLOWED_HOSTS
+(comma-separated, e.g. the Container Apps hostname) keeps the SDK's
+DNS-rebinding protection on behind a public hostname.
 """
 
 from __future__ import annotations
 
 import argparse
 import functools
+import hmac
 import os
 import uuid
 from datetime import datetime, timezone
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError as MCPToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp_types import ToolAnnotations
 
 from music_man.agent import operations
@@ -78,17 +89,71 @@ def start_session(dry_run: bool | None = None) -> str:
     return run_id
 
 
+API_KEY_HEADER = b"x-api-key"
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+class ApiKeyMiddleware:
+    """ASGI middleware: reject HTTP requests without the right X-API-Key; /healthz stays open for probes."""
+
+    def __init__(self, app, api_key: str) -> None:
+        self.app = app
+        self.api_key = api_key.encode()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["path"] == "/healthz":
+            return await self.app(scope, receive, send)
+        supplied = dict(scope["headers"]).get(API_KEY_HEADER, b"")
+        if not hmac.compare_digest(supplied, self.api_key):
+            await send({"type": "http.response.start", "status": 401,
+                        "headers": [(b"content-type", b"application/json")]})
+            return await send({"type": "http.response.body", "body": b'{"error": "invalid or missing API key"}'})
+        return await self.app(scope, receive, send)
+
+
+async def _healthz(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse({"status": "ok"})
+
+
+def http_app(host: str = "127.0.0.1", api_key: str | None = None, allowed_hosts: list[str] | None = None):
+    """The Streamable HTTP app (MCP at /mcp, GET /healthz), wrapped in API-key auth when a key is given."""
+    from starlette.routing import Route
+
+    security = None
+    if allowed_hosts:
+        security = TransportSecuritySettings(
+            allowed_hosts=allowed_hosts, allowed_origins=[f"https://{h}" for h in allowed_hosts]
+        )
+    elif host not in LOOPBACK:
+        # Behind an unknown public hostname the Host header can't be pinned; the API key is the gate.
+        security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    app = server.streamable_http_app(host=host, transport_security=security)
+    app.router.routes.append(Route("/healthz", _healthz))
+    return ApiKeyMiddleware(app, api_key) if api_key else app
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Music Man MCP server")
     parser.add_argument("--http", type=int, metavar="PORT", help="serve Streamable HTTP instead of stdio")
+    parser.add_argument("--host", default="127.0.0.1", help="interface to bind for --http")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     start_session(dry_run=True if args.dry_run else None)
-    if args.http:
-        server.run(transport="streamable-http", port=args.http)
-    else:
+    if not args.http:
         server.run()
+        return
+
+    import uvicorn
+
+    api_key = os.environ.get("MUSIC_MAN_MCP_API_KEY") or None
+    if args.host not in LOOPBACK and not api_key:
+        raise SystemExit("refusing to serve MCP beyond localhost without MUSIC_MAN_MCP_API_KEY")
+    allowed = [h.strip() for h in os.environ.get("MUSIC_MAN_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    uvicorn.run(http_app(args.host, api_key, allowed), host=args.host, port=args.http, proxy_headers=True)
 
 
 if __name__ == "__main__":
