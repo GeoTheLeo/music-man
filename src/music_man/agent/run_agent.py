@@ -131,7 +131,7 @@ class RunRecord:
     plan_model: str
     exec_model: str
     dry_run: bool
-    engine: str = "custom"  # custom (hand-written tool loop) | langgraph
+    engine: str = "custom"  # custom (hand-written tool loop) | langgraph | agno
     plan: list[dict] = field(default_factory=list)
     plan_fallback_used: bool = False
     tool_calls: list[ToolCallRecord] = field(default_factory=list)

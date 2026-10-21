@@ -137,7 +137,7 @@ Inspect MLflow runs with `.venv\Scripts\mlflow ui` (reads `./mlruns`).
 .venv\Scripts\pytest
 ```
 
-45 tests run offline (no API calls). `test_fraud_patterns.py` needs nothing external. `test_pipeline.py` spins
+56 tests run offline (no API calls); one more, a Neo4j integration test, runs only against a disposable container. `test_fraud_patterns.py` needs nothing external. `test_pipeline.py` spins
 up a local Spark session and runs the real pipeline against a tiny
 synthetic catalog (monkeypatched data directories - never touches your
 real `data/{bronze,silver,gold}`). `test_hardening.py` covers the hold
@@ -145,7 +145,10 @@ state machine, idempotency, dry-run, the code-enforced guardrails, cost
 accounting, and the eval grader. `test_mcp_server.py` drives the MCP server
 through a real MCP client; `test_agent_graph.py` drives the real LangGraph
 graph with a scripted fake model (pause, checkpointed resume, refusals,
-dry-run, iteration budget); `test_webhook.py` covers signatures,
+dry-run, iteration budget); `test_agent_agno.py` drives the real Agno agent
+and Agno's real Claude adapter with a scripted fake Anthropic client
+(queue-then-review, refusals, dry-run, turn budget, identical system prompt);
+`test_webhook.py` covers signatures,
 idempotent redelivery, and failure recording.
 
 ## Production hardening
@@ -181,11 +184,11 @@ what to propose.
   Opus 5. The tool loop uses prompt caching, the ~1M-row snapshot is cached
   in memory between tool calls, and every run reports its cost per phase.
 
-## One set of guardrails, three agent surfaces
+## One set of guardrails, four agent surfaces
 
 The four operations and every guardrail live in `agent/operations.py`.
-The hand-written agent, the MCP server, and the LangGraph agent are thin
-wrappers around it, so none of them can drift from or skip the rules.
+The hand-written agent, the MCP server, the LangGraph agent, and the Agno
+agent are thin wrappers around it, so none of them can drift from or skip the rules.
 
 ```bash
 uv sync --extra agents --extra webhook   # or: pip install -r requirements.txt
@@ -247,6 +250,37 @@ graph TD;
 ```bash
 python -m music_man.agent_graph.run "Find the suspicious artists and propose holds"
 python -m music_man.agent_graph.run --resume <thread_id> --approve 3 --reject 4
+```
+
+### Agno agent
+
+`src/music_man/agent_agno/` is the same agent on the [Agno](https://github.com/agno-agi/agno)
+agent framework: a planner `Agent` with `output_schema=Plan` (Claude Haiku 4.5,
+falling back to the execution model), then an investigator `Agent` (Claude
+Opus 5) that calls the same operations, so the same guardrails apply.
+Guardrail refusals come back to the model as tool errors.
+
+- **Human review:** `propose_hold` only queues a pending hold. The SQLite
+  approval queue is the durable pause point. `--review` decides a run's holds
+  from a new process, through the same compare-and-set state machine, and
+  the Streamlit reviewer can decide the same holds instead.
+- **Two Agno defaults are overridden, to keep the engine comparison fair:**
+  - Agno's Claude adapter appends its own sentence to the system prompt
+    whenever tools are present. `BudgetedClaude` drops it, so all three
+    engines send the identical prompt (asserted in the tests).
+  - Agno's `tool_call_limit` answers further tool calls with an error but
+    keeps calling the model, so a model that keeps asking for tools never
+    stops (seen offline, still looping after 40 model calls). The agent
+    counts model turns and a tool hook raises `StopAgentRun` once the budget
+    is spent, which gives Agno the same max-turns budget as the other engines.
+- It shares the Anthropic client from `make_client()`, so SDK retries,
+  timeouts, and the measured retry count match the hand-written agent.
+  Prompt caching is on, and per-turn token usage and cost go into the same
+  JSON run record. Agno telemetry is off.
+
+```bash
+python -m music_man.agent_agno.run "Find the suspicious artists and propose holds"
+python -m music_man.agent_agno.run --review <run_id> --approve 3 --reject 4
 ```
 
 ### Webhook trigger
@@ -457,6 +491,7 @@ src/music_man/
                 plan-then-execute loop, routing, run records), queue.py
                 (SQLite approval queue + state machine), cost.py (per-run cost)
   agent_graph/  graph.py + run.py (LangGraph agent: interrupt + checkpointer)
+  agent_agno/   agent.py + run.py (Agno agent: structured planner, turn budget)
   mcp_server.py MCP server exposing the operations to any MCP client
   webhook/      app.py (FastAPI trigger, idempotent + HMAC-signed)
   observability/ data.py + app.py (run-record loader + Streamlit incident dashboard)

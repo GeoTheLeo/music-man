@@ -10,7 +10,7 @@ cumulative spend (agent + judge) crosses the cap.
     python -m evals.run_evals --yes --trials 2      # full sweep
     python -m evals.run_evals --yes --scenario dry_run --config routed --trials 1
     python -m evals.run_evals --yes --record-golden # save passing runs as golden transcripts
-    python -m evals.run_evals --yes --config routed --engine custom --engine langgraph  # engine comparison
+    python -m evals.run_evals --yes --config routed --engine custom --engine langgraph --engine agno  # engine comparison
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from evals.scenarios import SCENARIOS, SCENARIOS_BY_ID
 from music_man.agent.cost import UsageTracker
 from music_man.agent.queue import list_holds
 from music_man.agent.run_agent import EXEC_MODEL, PLAN_MODEL, make_client, run_agent
+from music_man.agent_agno.run import run_agno
 from music_man.agent_graph.run import run_graph
 
 CONFIGS = {
@@ -38,7 +39,7 @@ CONFIGS = {
     "opus-only": {"plan_model": EXEC_MODEL, "exec_model": EXEC_MODEL},
 }
 REPORTS_DIR = Path(__file__).parent / "reports"
-ENGINES = ("custom", "langgraph")
+ENGINES = ("custom", "langgraph", "agno")
 EST_COST_PER_RUN_USD = 0.15  # rough planning figure; the report records the real cost
 
 
@@ -52,6 +53,10 @@ def _run_trial(client, scenario, engine, config_name, trial, workdir: Path, use_
         # Stops at the human-review interrupt; the grader reads the pending holds it queued.
         record, _ = run_graph(scenario.prompt, dry_run=scenario.dry_run, verbose=False, save=False,
                               **CONFIGS[config_name])
+    elif engine == "agno":
+        # Ends with any holds pending in the approval queue; the grader reads them there.
+        record = run_agno(scenario.prompt, dry_run=scenario.dry_run, client=client, verbose=False, save=False,
+                          **CONFIGS[config_name])
     else:
         record = run_agent(scenario.prompt, dry_run=scenario.dry_run, client=client, verbose=False,
                            save=False, **CONFIGS[config_name])
